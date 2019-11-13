@@ -45,12 +45,15 @@
             $cid = get_user_meta( $current_user->ID, 'pas_os_cid' , true );
             $clientDate = ['cid'=>$cid];
             $result = $pasos->sendAnswer($clientDate, $answerData);
-            if($result['Status']==1){
-                if(!get_option('pas_os_user_access_proccess')) $result['data'] = pas_os_form($pasos_form['qid'],$answerList,'disabled');
-                $result['chart'] = '<script>function pas_os_chart_js(){'.str_replace('$(','jQuery(', $result['chart']).'} pas_os_chart_js();</script>';
+            if($result['status']==1){
+                if(!get_option('pas_os_user_access_proccess')){
+                    $result['data'] = pas_os_form($pasos_form['qid'],$answerList,'disabled');
+                } else {
+                     $result['data'] = $result['data'].' '.'<script>function pas_os_chart_js(){'.str_replace('$(','jQuery(', $result['chart']).'} pas_os_chart_js();</script>';
+                }
                 $result = ['status'=> true,'result'=>$result,'content'=>'<div class="alert alert-success">پاسخ نامه مورد نظر با موفقیت ثبت شد</div>'];
             } else{
-                $result = ['status'=>false,'content'=>$result['message']];
+                $result = ['status'=>false,'content'=>$result];
             }
         }
        if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
@@ -76,9 +79,9 @@
             //$pasos_form['cid'] = '23123144';
             $clientDate = $pasos->clientDate($pasos_form);
             $result = $pasos->addClient($clientDate);
-            if($result['Status']==1){
+            if($result['status']==1){
                 update_user_meta( $current_user->ID, 'pas_os_cid',   $result['client']['cid']  );
-                $result = ['status'=> true,'content'=>'<div class="alert alert-success">کاربر مورد نظر با موفقیت ثبت شد</div>'];
+                $result = ['status'=> true,'form'=> pas_os_form($pasos_form['qid']), 'content'=>'<div class="alert alert-success">کاربر مورد نظر با موفقیت ثبت شد</div>'];
             } else{
                 $result = ['status'=>false,'content'=>$result['message']];
             }
@@ -161,8 +164,8 @@ function pas_os_answers($atts){
 function pas_os_form($qid,$answers=[],$disabel=''){
     if ( !is_user_logged_in() ) {
         $html = '<div class="alert alert-warning">برای مشاهده لطفا وارد پنل کاربری خود شوید یا ثبت نام کنید.</div>';
-        $html .= '<hr /><a href="" type="button" class="btn btn-primary">ثبت نام</a>
-                    <a href="" type="button" class="btn btn-info">ورود به کاربری</a><br>';
+        $html .= '<hr /><a href="'.get_option('pas_os_signup_url').'" type="button" class="btn btn-primary">ثبت نام</a>
+                    <a href="'.get_option('pas_os_login_url').'" type="button" class="btn btn-info">ورود به کاربری</a><br>';
         return $html;
     }
     $current_user = wp_get_current_user();

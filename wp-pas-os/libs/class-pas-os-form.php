@@ -58,8 +58,6 @@ class MyForms {
                 case "text":
                 case "number":
                 case "password":
-                case "hidden":
-                case "submit":
                 case "email":
                     if($this->_inputs[$i]['label']) $html .= '<label for="owproman-'.$this->_inputs[$i]['name'].'">'.$this->_inputs[$i]['label'].'</label>';
                     if($this->_between) $html .= $this->_between;
@@ -72,6 +70,26 @@ class MyForms {
                     $html .= ' value="'.$this->_inputs[$i]['value'].'" ';
                     $html.= ' placeholder="'.$this->_inputs[$i]['placeholder'].'" > ';
                     $html .= ' '.$this->_inputs[$i]['extra'].'';
+                    break;
+                case "submit":
+                    $html .= '<br><input type="'.$this->_inputs[$i]['type'].'" ';
+                    $html .= ' id="owproman-'.$this->_inputs[$i]['name'].'" ';
+                    if($this->_inputs[$i]['class']) $html .= ' class="'.$this->_inputs[$i]['class'].'" ';
+                    if($this->_inputs[$i]['required']) $html .= ' required="'.$this->_inputs[$i]['required'].'" ';
+                    if($this->_disabel) $html .= ' disabled="'.$this->_disabel.'"';
+                    $html .= ' name="'.$this->_inputs[$i]['name'].'" ';
+                    $html .= ' value="'.$this->_inputs[$i]['value'].'" ';
+                    $html.= ' placeholder="'.$this->_inputs[$i]['placeholder'].'" > ';
+                    $html .= ' '.$this->_inputs[$i]['extra'].'';
+                    break;
+                case "hidden":
+                    $html .= '<input type="'.$this->_inputs[$i]['type'].'" ';
+                    $html .= ' id="owproman-'.$this->_inputs[$i]['name'].'" ';
+                    if($this->_inputs[$i]['class']) $html .= ' class="'.$this->_inputs[$i]['class'].'" ';
+                    if($this->_inputs[$i]['required']) $html .= ' required="'.$this->_inputs[$i]['required'].'" ';
+                    if($this->_disabel) $html .= ' disabled="'.$this->_disabel.'"';
+                    $html .= ' name="'.$this->_inputs[$i]['name'].'" ';
+                    $html .= ' value="'.$this->_inputs[$i]['value'].'"  > ';
                     break;
                 case "editor":
                     if($this->_inputs[$i]['label']) $html .= '<label for="owproman-'.$this->_inputs[$i]['name'].'">'.$this->_inputs[$i]['label'].'</label>';

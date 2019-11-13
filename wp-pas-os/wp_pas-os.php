@@ -6,7 +6,7 @@ Description: افزونه اتصال به سامانه سنجش روان
 Version:     1
 Author:      پردانش
 Author URI:  https://pardanesh.com/
-License:     PDHS
+License:     GPLv2
 
 */
 if (!defined('ABSPATH')) exit;

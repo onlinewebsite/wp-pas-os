@@ -31,11 +31,11 @@ class Pas_Os_Pages
     function pas_os_scripts_method() {
         wp_enqueue_script('highcharts', 'https://pas-os.com/theme/online/js/highcharts.js',array( 'jquery' ),  '1.0.0', false);
         if(get_option('pas_os_style')) {
-             wp_enqueue_style('pasos-style', plugins_url( 'wp-pas-os/assets/css/pasos.css' ), false, '1.0.0');
+             wp_enqueue_style('pasos-style', PLUGIN_URL.'assets/css/pasos.css', false, '1.0.0');
         }
         wp_enqueue_script(
             'pasos-script',
-            plugins_url( 'wp-pas-os/assets/js/pasos.js' ),
+            PLUGIN_URL.'assets/js/pasos.js',
             array( 'jquery' ) #dependencies
         );
         wp_localize_script(
@@ -97,7 +97,7 @@ class Pas_Os_Pages
             'manage_options',
             'pardanesh-pasos.php',
             array($this,'pardanesh_pasos_options'),
-            plugins_url( 'wp-pas-os/assets/pasos.png' ),
+            PLUGIN_URL.'assets/pasos.png',
             56
         );
         add_submenu_page(
