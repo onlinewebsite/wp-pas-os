@@ -205,7 +205,7 @@ class Pas_Os_Pages
     }
     public function pardanesh_pasos_questions()
     {
-            $pasosQuestions = new Wc_pasOs_Questions();
+            $pasosQuestions = new PasOs_Questions_List_Table();
             $pasosQuestions->prepare_items();
             ?>
                 <div class="wrap">
