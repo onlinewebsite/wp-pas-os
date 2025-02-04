@@ -1,183 +1,346 @@
 <?php
-if( ! class_exists( 'WP_List_Table' ) ) {
-    require_once( ABSPATH . 'wp-admin/includes/class-wp-list-table.php' );
+if (!class_exists('WP_List_Table')) {
+    require_once ABSPATH . 'wp-admin/includes/class-wp-list-table.php';
 }
-class Wc_pasOs_Questions extends WP_List_Table
+
+class PasOs_Questions_List_Table extends WP_List_Table
 {
+    private $api;
+    private $nonce_action = 'pasos_questions_action';
+
     public function __construct()
-        {
-            parent::__construct(array(
-                'singular' => 'wp_list_text_link',
-                'plural' => 'wp_list_test_links',
-                'ajax' => true
-            ));
-            wp_enqueue_script('pasos_ajax_script', PLUGIN_URL . 'assets/js/pasos-admin.js', array('jquery'), '1.0.0', true );
-            wp_enqueue_script( 'pasos_ajax_script' );
-        }
-    public function pas_os_form($qid,$answers=[],$disabel=''){
-        $pasos =  new WC_PasOs_Api;
-        $result = $pasos->getQuestion($qid); // print_r($result);
-        if(!isset($result['status'])) return;
-        if($result['status']!=1){
-            return pas_os_error($result['message']);
-        }
-        $html = '<div class="pas-os-result"></div>
-            <div class="pas-os-data"><h3>'.$result['question']['title'].'</h3>';
-        $html .= '<div class="notice notice-success is-dismissible">'.$result['question']['description'].'</div>';
-        $html .= '';
-        $form = new MyForms('POST','','<div style="padding: 10px; background: #FFFFFF; margin-bottom: 5px; border: 1px solid #EEEEEE" class="form-group"><div>','</div></div>','</p><p>',$disabel);
-        $form->addContent('<div class="notice notice-warning is-dismissible"><p>برای ثبت پاسخ نامه تعریف کاربر الزامی می باشد. در صورتی که قبلا کاربر را تعریف کرده اید کد یکتای کاربر را از لیست کاربران انتخاب و  وارد کنید</p></div>');
-        $form->addInput('text','cid','','required','','شناسه یکتای کاربر <span class="text-danger">*</span>','شناسه یکتای کاربر را وارد نمایید','regular-text','برای ارسال پاسخ نامه ابتدا کاربر را از قسمت کاربران ثبت کنید و کد یکتای کاربر را وارد نمایید');
-        foreach($result['question']['questions'] as $key=>$question){
-            $form->addInput('radio','question['.$key.']', '','',$result['question']['answers'],$question.' <span class="text-danger">*</span>','Please Select','form-check-input');
-        }
-        //$form->addContent('1234543545');
-        $form->addInput('hidden','qid',$qid, '','','','','');
-        $form->addInput('hidden','pas_os_nonce',wp_create_nonce( 'pas_os-ref-nonce-' . $qid ), '','','','','');
-        if(!$disabel) $form->addInput('submit','', 'ثبت پاسخ نامه','','','','','button button-primary');
-        $html .= $form->printForm();
-        $html .= '</div>';
-        return $html;
+    {
+        parent::__construct([
+            'singular' => 'question',
+            'plural'   => 'questions',
+            'ajax'     => true
+        ]);
+
+        $this->api = new WC_PasOs_Api();
+        
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
+
+    public function enqueue_admin_assets()
+    {
+        wp_enqueue_script(
+            'pasos-admin',
+            PLUGIN_URL . 'assets/js/pasos-admin.js',
+            ['jquery'],
+            filemtime(PLUGIN_PATH . 'assets/js/pasos-admin.js'),
+            true
+        );
+
+        wp_localize_script('pasos-admin', 'pasosData', [
+            'ajaxUrl'   => admin_url('admin-ajax.php'),
+            'nonce'     => wp_create_nonce($this->nonce_action),
+            'confirmMsg' => esc_html__('آیا از انجام این عمل اطمینان دارید؟', 'pas-os')
+        ]);
+    }
+
     public function prepare_items()
     {
-        //$this->process_bulk_action();
-        $columns = $this->get_columns();
-        $hidden = $this->get_hidden_columns();
-        $sortable = $this->get_sortable_columns();// print_r($sortable);
-        $alldata = $this->table_data();
-        $currentPage = $this->get_pagenum();
-        $this->set_pagination_args( array(
-            'total_items' => $alldata['paging']['count'],
-            'per_page'    => $alldata['paging']['limit']
-        ) );
-        $this->_column_headers = array($columns, $hidden, $sortable);
-        $this->items = $alldata['questions'];
+        $this->_column_headers = [
+            $this->get_columns(),
+            $this->get_hidden_columns(),
+            $this->get_sortable_columns()
+        ];
+
+        $current_page = $this->get_pagenum();
+        $filter = $this->get_sanitized_filters();
+        
+        $data = $this->api->getQuestions(
+            $current_page,
+            $this->get_items_per_page('questions_per_page'),
+            $filter
+        );
+
+        $this->set_pagination_args([
+            'total_items' => $data['paging']['count'] ?? 0,
+            'per_page'    => $data['paging']['limit'] ?? 20
+        ]);
+
+        $this->items = $data['questions'] ?? [];
     }
+
+    private function get_sanitized_filters(): array
+    {
+        return [
+            'orderby' => $this->sanitize_orderby($_REQUEST['orderby'] ?? 'qid'),
+            'order'   => $this->sanitize_order($_REQUEST['order'] ?? 'DESC'),
+            's'       => sanitize_text_field($_REQUEST['s'] ?? ''),
+            'price'   => absint($_REQUEST['price'] ?? 0),
+            'category' => absint($_REQUEST['category'] ?? 0),
+            'groups'   => absint($_REQUEST['groups'] ?? 0)
+        ];
+    }
+
+    private function sanitize_orderby(string $orderby): string
+    {
+        $allowed = ['title', 'qid', 'price', 'category', 'groups'];
+        return in_array($orderby, $allowed) ? $orderby : 'qid';
+    }
+
+    private function sanitize_order(string $order): string
+    {
+        return strtoupper($order) === 'ASC' ? 'ASC' : 'DESC';
+    }
+
     public function get_columns()
     {
-        $columns = array(
-            'cb'      => '<input type="checkbox" />',
-            'title'       => 'عنوان آزمون',
-            'category'       => 'دسته بندی',
-            'groups'       => 'گروه سنی',
-            'qid'          => 'شماره آزمون',
-            'shortcode'          => 'کد کوتاه',
-            'price'        => 'قیمت به ریال',
-        );
-        return $columns;
+        return [
+            'cb'         => '<input type="checkbox" />',
+            'title'      => esc_html__('عنوان آزمون', 'pas-os'),
+            'category'   => esc_html__('دسته بندی', 'pas-os'),
+            'groups'     => esc_html__('گروه سنی', 'pas-os'),
+            'qid'        => esc_html__('شماره آزمون', 'pas-os'),
+            'shortcode'  => esc_html__('کد کوتاه', 'pas-os'),
+            'price'      => esc_html__('قیمت به ریال', 'pas-os'),
+        ];
     }
-    public function no_items() {
-      echo 'موردی یافت نشد';
-    }
-    public function column_title( $item ) {
-      $order_nonce = wp_create_nonce( 'pasos_cancel_order' );
-      $title = '<strong>' . $item['title'] . '</strong>';
-      $actions = [
-        'bulk-orders' => sprintf( '<a href="?page=%s&qid=%s">لیست پاسخ نامه ها</a>', esc_attr( 'pardanesh-pasos-answers.php' ), absint( $item['qid'] ) ),
-        'bulk-cancel' => sprintf( '<a href="?page=%s&action=view-form&qid=%s" class="pasos-question">مشاهده</a>',esc_attr( 'pardanesh-pasos-questions.php' ),  absint( $item['qid'] ))
-      ];
-      return $title . $this->row_actions( $actions );
-    }
-    public function column_groups( $item ) {
-      return $item['groups']['title'];
-    }
-    public function column_price( $item ) {
-      return ($item['price']==0)?'رایگان':number_format($item['price']).' ریال';
-    }
-    public function column_category( $item ) {
-      return $item['category']['title'];
-    }
-    public function column_shortcode( $item ) {
-      return '<span dir="ltr">[pas-os qid="'.$item['qid'].'"]</span>';
-    }
-    public function column_cb( $item ) {
-      return sprintf(
-        '<input type="checkbox" name="bulk-delete[]" value="%s" />', $item['qid']
-      );
-    }
-    public function get_hidden_columns()
+
+    public function column_default($item, $column_name)
     {
-        return array();
+        switch ($column_name) {
+            case 'qid':
+                return absint($item[$column_name]);
+            
+            case 'title':
+                return $this->column_title($item);
+            
+            case 'price':
+                return $this->format_price($item[$column_name]);
+            
+            case 'category':
+            case 'groups':
+                return esc_html($item[$column_name]['title'] ?? '');
+            
+            case 'shortcode':
+                return $this->get_shortcode($item['qid']);
+            
+            default:
+                return esc_html(print_r($item, true));
+        }
+    }
+
+    private function format_price($price): string
+    {
+        if (!is_numeric($price)) return esc_html__('نامعلوم', 'pas-os');
+        return ($price == 0) ? 
+            esc_html__('رایگان', 'pas-os') : 
+            number_format_i18n($price) . ' ' . esc_html__('ریال', 'pas-os');
+    }
+
+    private function get_shortcode(int $qid): string
+    {
+        return sprintf(
+            '<code dir="ltr">[pas-os qid="%d"]</code>',
+            absint($qid)
+        );
+    }
+
+    public function column_title(array $item): string
+    {
+        $title = sprintf(
+            '<strong>%s</strong>',
+            esc_html($item['title'])
+        );
+
+        $actions = [
+            'answers' => sprintf(
+                '<a href="?page=%s&qid=%d">%s</a>',
+                esc_attr('pardanesh-pasos-answers'),
+                absint($item['qid']),
+                esc_html__('لیست پاسخ‌نامه‌ها', 'pas-os')
+            ),
+            'view' => sprintf(
+                '<a href="?page=%s&action=view-form&qid=%d" class="pasos-question">%s</a>',
+                esc_attr('pardanesh-pasos-questions'),
+                absint($item['qid']),
+                esc_html__('مشاهده', 'pas-os')
+            )
+        ];
+
+        return $title . $this->row_actions($actions);
+    }
+
+    public function column_cb($item)
+    {
+        return sprintf(
+            '<input type="checkbox" name="bulk-delete[]" value="%s" />',
+            absint($item['qid'])
+        );
     }
 
     public function get_sortable_columns()
     {
-        return array('title' => array('title', false),'qid' => array('qid', false),'price' => array('price', false),'category' => array('category', false),'groups' => array('groups', false));
+        return [
+            'title'    => ['title', false],
+            'qid'      => ['qid', false],
+            'price'    => ['price', false],
+            'category' => ['category', false],
+            'groups'   => ['groups', false]
+        ];
     }
-    private function table_data()
+
+    public function search_box($text, $input_id)
     {
-        $data = ['questions'=>[],'paging'=>['paging'=>['count'=>0]]];
-        $filter['limit'] =  20;
-        $filter['filter'] = [];
-        if(isset($_REQUEST['orderby']) AND $_REQUEST['orderby']!='') $filter['orderby'] = $_REQUEST['orderby'];
-        if(isset($_REQUEST['order']) AND $_REQUEST['order']!='') $filter['order'] = $_REQUEST['order'];
-        if(isset($_REQUEST['s']) AND $_REQUEST['s']!='') $filter['filter']['title'] = $_REQUEST['s'];
-        if(isset($_REQUEST['price']) AND $_REQUEST['price']!='') $filter['filter']['price'] = $_REQUEST['price'];
-        if(isset($_REQUEST['category']) AND $_REQUEST['category']!='') $filter['filter']['category'] = $_REQUEST['category'];
-        if(isset($_REQUEST['groups']) AND $_REQUEST['groups']!='') $filter['filter']['groups'] = $_REQUEST['groups'];
-        $pasos =  new WC_PasOs_Api;     //  echo $this->get_pagenum();
-        $ref_orders = $pasos->getQuestions($this->get_pagenum(),$filter);
-        //print_r($ref_orders);
-        if(isset($ref_orders['status']) AND $ref_orders['status']==1){
-           $data = $ref_orders;
-        }
-        return $data;
+        $metas = $this->api->getMetas();
+        ?>
+        <div class="pasos-search-box">
+            <p class="search-box">
+                <label class="screen-reader-text" for="<?php echo esc_attr($input_id); ?>">
+                    <?php echo esc_html($text); ?>
+                </label>
+                
+                <input type="search" 
+                    id="<?php echo esc_attr($input_id); ?>" 
+                    name="s" 
+                    placeholder="<?php esc_attr_e('عنوان آزمون', 'pas-os'); ?>"
+                    value="<?php _admin_search_query(); ?>"
+                />
+                
+                <input type="number" 
+                    id="price" 
+                    name="price" 
+                    placeholder="<?php esc_attr_e('قیمت آزمون', 'pas-os'); ?>"
+                    value="<?php echo isset($_REQUEST['price']) ? absint($_REQUEST['price']) : ''; ?>"
+                />
+
+                <?php if ($metas['status'] === 1) : ?>
+                    <select name="category">
+                        <option value=""><?php esc_html_e('دسته بندی', 'pas-os'); ?></option>
+                        <?php foreach ($metas['category'] as $key => $value) : ?>
+                            <option 
+                                value="<?php echo absint($key); ?>"
+                                <?php selected(isset($_REQUEST['category']) && $_REQUEST['category'] == $key); ?>
+                            >
+                                <?php echo esc_html($value); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+
+                    <select name="groups">
+                        <option value=""><?php esc_html_e('گروه سنی', 'pas-os'); ?></option>
+                        <?php foreach ($metas['groups'] as $key => $value) : ?>
+                            <option 
+                                value="<?php echo absint($key); ?>"
+                                <?php selected(isset($_REQUEST['groups']) && $_REQUEST['groups'] == $key); ?>
+                            >
+                                <?php echo esc_html($value); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                <?php endif; ?>
+
+                <?php submit_button($text, 'button', '', false, ['id' => 'search-submit']); ?>
+            </p>
+        </div>
+        <?php
     }
-    public function process_bulk_action() {
-        if ( 'view-form' === $this->current_action() ) {
-            echo $this->pas_os_form(absint( $_GET['qid'] ));
-        }
-    }
-    public function column_default( $item, $column_name )
+
+    public function process_bulk_action()
     {
-        switch( $column_name ) {
-            case 'qid':
-            case 'title':
-            case 'price':
-            case 'category':
-            case 'groups':
-                return $item[ $column_name ];
-            default:
-                return print_r( $item, true ) ;
+        if ('view-form' === $this->current_action() && !empty($_GET['qid'])) {
+            echo $this->render_question_form(absint($_GET['qid']));
         }
     }
-    private function sort_data( $a, $b )
+
+    private function render_question_form(int $qid): string
     {
-        $orderby = 'qid';
-        $order = 'DESC';
-        if(!empty($_GET['orderby']))
-        {
-            $orderby = $_GET['orderby'];
+        $result = $this->api->getQuestion($qid);
+        
+        if (!isset($result['status']) || $result['status'] !== 1) {
+            return $this->render_error_message(
+                $result['message'] ?? esc_html__('خطا در دریافت اطلاعات پرسشنامه', 'pas-os')
+            );
         }
-        if(!empty($_GET['order']))
-        {
-            $order = $_GET['order'];
-        }
-        $result = strcmp( $a[$orderby], $b[$orderby] );
-        if($order === 'DESC')
-        {
-            return $result;
-        }
-        return -$result;
+
+        ob_start();
+        ?>
+        <div class="pasos-admin-form">
+            <div class="notice notice-info">
+                <p><?php echo esc_html($result['question']['description']); ?></p>
+            </div>
+
+            <form method="post" class="pasos-question-form">
+                <?php $this->render_form_header(); ?>
+                <?php $this->render_form_fields($result); ?>
+                <?php $this->render_form_footer($qid); ?>
+            </form>
+        </div>
+        <?php
+        return ob_get_clean();
     }
-     public function search_box( $text, $input_id ) {
-         $pasos =  new WC_PasOs_Api; $metas = $pasos->getMetas(); //print_r($metas); ?>
-        <p class="search-box">
-          <label class="screen-reader-text" for="<?php echo $input_id ?>"><?php echo $text; ?>:</label>
-          <input type="search" id="<?= $input_id ?>" name="s" placeholder="عنوان آزمون" value="<?php _admin_search_query(); ?>" />
-          <input type="text" id="price" name="price" placeholder="قیمت آزمون" value="<?php echo ( isset( $_REQUEST['price'] ) ) ? $_REQUEST['price'] : false; ?>" />
-          <?php if($metas['status']==1){ ?>
-          <select name="category">
-              <option value="">دسته بندی</option>
-              <?php foreach($metas['category'] as $kk=>$vv) echo '<option value="'.$kk.'">'.$vv.'</div>';?>
-          </select>
-          <select name="groups">
-              <option value="">گروه سنی</option>
-                <?php foreach($metas['groups'] as $kg=>$vg) echo '<option value="'.$kg.'">'.$vg.'</div>';?>
-          </select>
-          <?php } ?>
-          <?php submit_button( $text, 'button', false, false, array('id' => 'search-submit') ); ?>
-      </p>
-    <?php }
+
+    private function render_form_header(): void
+    {
+        ?>
+        <div class="notice notice-warning">
+            <p><?php esc_html_e('برای ثبت پاسخ‌نامه، تعریف کاربر الزامی است.', 'pas-os'); ?></p>
+        </div>
+        <?php
+    }
+
+    private function render_form_fields(array $result): void
+    {
+        ?>
+        <div class="form-section">
+            <label for="pasos-cid">
+                <?php esc_html_e('شناسه یکتای کاربر:', 'pas-os'); ?>
+                <span class="text-danger">*</span>
+            </label>
+            <input 
+                type="text" 
+                id="pasos-cid" 
+                name="cid" 
+                required
+                class="regular-text"
+                placeholder="<?php esc_attr_e('کد یکتای کاربر را وارد نمایید', 'pas-os'); ?>"
+            >
+            <p class="description">
+                <?php esc_html_e('برای ارسال پاسخ‌نامه ابتدا کاربر را از قسمت کاربران ثبت کنید', 'pas-os'); ?>
+            </p>
+        </div>
+
+        <?php foreach ($result['question']['questions'] as $key => $question) : ?>
+            <fieldset class="form-fieldset">
+                <legend><?php echo esc_html($question); ?></legend>
+                <?php foreach ($result['question']['answers'] as $value => $label) : ?>
+                    <label class="form-radio-label">
+                        <input 
+                            type="radio" 
+                            name="question[<?php echo absint($key); ?>]" 
+                            value="<?php echo esc_attr($value); ?>"
+                            required
+                        >
+                        <?php echo esc_html($label); ?>
+                    </label>
+                <?php endforeach; ?>
+            </fieldset>
+        <?php endforeach; ?>
+        <?php
+    }
+
+    private function render_form_footer(int $qid): void
+    {
+        wp_nonce_field('pasos_question_submit', 'pasos_question_nonce');
+        ?>
+        <input type="hidden" name="qid" value="<?php echo absint($qid); ?>">
+        <?php submit_button(esc_html__('ثبت پاسخ‌نامه', 'pas-os'), 'primary'); ?>
+        <?php
+    }
+
+    private function render_error_message(string $message): string
+    {
+        return sprintf(
+            '<div class="notice notice-error"><p>%s</p></div>',
+            esc_html($message)
+        );
+    }
+
+    public function no_items()
+    {
+        echo esc_html__('موردی یافت نشد', 'pas-os');
+    }
 }
