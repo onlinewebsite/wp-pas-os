@@ -1,218 +1,229 @@
 <?php
-    function pas_os_ajax_admin_request() {
-        parse_str($_REQUEST['pas_os_form'], $pasos_form);
-        if ( !wp_verify_nonce( $pasos_form['pas_os_nonce'], 'pas_os-ref-nonce-' .$pasos_form['qid'])) {
-          exit("pasos.com");
+// Security improvements and code optimization
+class PasOs_Handler {
+    private static function verify_request($qid = null) {
+        if (!isset($_POST['pas_os_form'])) {
+            wp_send_json_error('Invalid request format');
         }
-        $result = ['status'=>false,'content'=>'خطا در پردازش اطلاعات'];
-        if ( isset($_REQUEST) ) {
-            $current_user = wp_get_current_user();
-            //array_values($params['question']);
-            $pasos =  new WC_PasOs_Api;
-            $answerList = array_values($pasos_form['question']);
-            $answerData = $pasos->answerData($pasos_form['qid'], $answerList);
-            $clientDate = ['cid'=>$pasos_form['cid']];
-            $result = $pasos->sendAnswer($clientDate, $answerData);
-            if($result['status']==1){
-                $result['data'] = str_replace('<table','<table class="wp-list-table widefat fixed striped"',$result['data']);
-                $result['chart'] = '<script>function pas_os_chart_js(){'.str_replace('$(','jQuery(', $result['chart']).'} pas_os_chart_js();</script>';
-                $result = ['status'=> true,'result'=>$result,'content'=>'<div class="notice notice-success"><p>پاسخ نامه مورد نظر با موفقیت ثبت شد</p></div>'];
-            } else{
-                $result = ['status'=>false,'content'=>$result['message']];
-            }
+        
+        parse_str($_POST['pas_os_form'], $form_data);
+        $nonce_action = $qid ? 'pas_os-ref-nonce-' . $qid : 'pas_os-ref-nonce';
+        
+        if (!wp_verify_nonce($form_data['pas_os_nonce'] ?? '', $nonce_action)) {
+            wp_send_json_error('Nonce verification failed');
         }
-       if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-          $result = json_encode($result);
-          echo $result;
-       }
-       else {
-          header("Location: ".$_SERVER["HTTP_REFERER"]);
-       }
-       die();
+        
+        return $form_data;
     }
-    function pas_os_ajax_request() {
-        parse_str($_REQUEST['pas_os_form'], $pasos_form);
-        if ( !wp_verify_nonce( $pasos_form['pas_os_nonce'], 'pas_os-ref-nonce-' .$pasos_form['qid'])) {
-          exit("pasos.com");
+
+    private static function sanitize_client_data($data) {
+        return [
+            'clientName' => sanitize_text_field($data['clientName'] ?? ''),
+            'bday'       => absint($data['bday'] ?? 0),
+            'gender'     => in_array($data['gender'] ?? '', ['1', '2']) ? $data['gender'] : '1',
+            'marital'    => in_array($data['marital'] ?? '', ['1', '2']) ? $data['marital'] : '1',
+            'edu'        => sanitize_text_field($data['edu'] ?? ''),
+            'city'       => sanitize_text_field($data['city'] ?? ''),
+            'phone'      => sanitize_text_field($data['phone'] ?? ''),
+            'qid'        => absint($data['qid'] ?? 0)
+        ];
+    }
+
+    public static function handle_admin_request() {
+        try {
+            $form_data = self::verify_request();
+            $pasos = new WC_PasOs_Api;
+            $client_data = self::sanitize_client_data($form_data);
+            
+            $result = $pasos->addClient($client_data);
+            if ($result['status'] != 1) {
+                throw new Exception($result['message'] ?? 'Operation failed');
+            }
+            
+            wp_send_json_success([
+                'content' => sprintf(
+                    '<div class="notice notice-success"><p>کاربر با موفقیت ثبت شد. کد یکتا: <b>%s</b></p></div>',
+                    esc_html($result['client']['cid'] ?? '')
+                )
+            ]);
+            
+        } catch (Exception $e) {
+            wp_send_json_error('<div class="notice notice-error">' . esc_html($e->getMessage()) . '</div>');
         }
-        $result = ['status'=>false,'content'=>'خطا در پردازش اطلاعات'];
-        if ( isset($_REQUEST) ) {
+    }
+
+    public static function handle_client_request() {
+        try {
+            $form_data = self::verify_request();
             $current_user = wp_get_current_user();
-            //array_values($params['question']);
-            $pasos =  new WC_PasOs_Api;
-            $answerList = array_values($pasos_form['question']);
-            $answerData = $pasos->answerData($pasos_form['qid'], $answerList);
-            $cid = get_user_meta( $current_user->ID, 'pas_os_cid' , true );
-            $clientDate = ['cid'=>$cid];
-            $result = $pasos->sendAnswer($clientDate, $answerData);
-            if($result['status']==1){
-                if(!get_option('pas_os_user_access_proccess')){
-                    $result['data'] = pas_os_form($pasos_form['qid'],$answerList,'disabled');
-                } else {
-                     $result['data'] = $result['data'].' '.'<script>function pas_os_chart_js(){'.str_replace('$(','jQuery(', $result['chart']).'} pas_os_chart_js();</script>';
+            $pasos = new WC_PasOs_Api;
+            
+            $client_data = self::sanitize_client_data($form_data);
+            $result = $pasos->addClient($client_data);
+            
+            if ($result['status'] != 1) {
+                throw new Exception($result['message'] ?? 'Operation failed');
+            }
+            
+            update_user_meta($current_user->ID, 'pas_os_cid', sanitize_text_field($result['client']['cid']));
+            
+            wp_send_json_success([
+                'form'    => self::generate_form($form_data['qid']),
+                'content' => '<div class="alert alert-success">اطلاعات با موفقیت ثبت شد</div>'
+            ]);
+            
+        } catch (Exception $e) {
+            wp_send_json_error('<div class="alert alert-danger">' . esc_html($e->getMessage()) . '</div>');
+        }
+    }
+
+    public static function handle_answer_submission() {
+        try {
+            $form_data = self::verify_request($form_data['qid'] ?? 0);
+            $current_user = wp_get_current_user();
+            $pasos = new WC_PasOs_Api;
+            
+            $answers = array_map('absint', $form_data['question'] ?? []);
+            $answer_data = $pasos->answerData(
+                absint($form_data['qid']),
+                $answers
+            );
+            
+            $client_id = get_user_meta($current_user->ID, 'pas_os_cid', true);
+            $result = $pasos->sendAnswer(
+                ['cid' => sanitize_text_field($client_id)],
+                $answer_data
+            );
+            
+            if ($result['status'] != 1) {
+                throw new Exception($result['message'] ?? 'Submission failed');
+            }
+            
+            $response = [
+                'status'  => true,
+                'content' => '<div class="alert alert-success">پاسخ‌نامه با موفقیت ثبت شد</div>',
+                'data'    => self::sanitize_output($result['data'] ?? '')
+            ];
+            
+            if (!get_option('pas_os_user_access_proccess')) {
+                $response['data'] = self::generate_form($form_data['qid'], $answers, 'disabled');
+            } else {
+                $response['chart'] = self::sanitize_chart_script($result['chart'] ?? '');
+            }
+            
+            wp_send_json_success($response);
+            
+        } catch (Exception $e) {
+            wp_send_json_error('<div class="alert alert-danger">' . esc_html($e->getMessage()) . '</div>');
+        }
+    }
+
+    private static function sanitize_output($html) {
+        return wp_kses_post(str_replace('<table', '<table class="wp-list-table widefat fixed striped"', $html));
+    }
+
+    private static function sanitize_chart_script($script) {
+        $sanitized = str_replace('$(', 'jQuery(', $script);
+        return '<script type="text/javascript">' . wp_kses($sanitized, ['script' => []]) . '</script>';
+    }
+
+    public static function generate_form($qid, $answers = [], $disabled = '') {
+        if (!is_user_logged_in()) {
+            return sprintf(
+                '<div class="alert alert-warning">%s</div>
+                <a href="%s" class="btn btn-primary">ثبت نام</a>
+                <a href="%s" class="btn btn-info">ورود</a>',
+                esc_html__('لطفا وارد شوید یا ثبت نام کنید'),
+                esc_url(get_option('pas_os_signup_url')),
+                esc_url(get_option('pas_os_login_url'))
+            );
+        }
+        
+        $current_user = wp_get_current_user();
+        if (!get_user_meta($current_user->ID, 'pas_os_cid', true)) {
+            return self::generate_client_form($qid);
+        }
+        
+        $pasos = new WC_PasOs_Api;
+        $question_data = $pasos->getQuestion(absint($qid));
+        
+        if (empty($question_data['status']) || $question_data['status'] != 1) {
+            return '<div class="alert alert-danger">خطا در دریافت اطلاعات پرسشنامه</div>';
+        }
+        
+        ob_start();
+        ?>
+        <div class="pas-os-result"></div>
+        <div class="pas-os-data">
+            <h3><?php echo esc_html($question_data['question']['title']); ?></h3>
+            <div class="alert alert-info"><?php echo esc_html($question_data['question']['description']); ?></div>
+            <form method="post">
+                <?php 
+                foreach ($question_data['question']['questions'] as $key => $question) {
+                    printf(
+                        '<div class="form-group">
+                            <label>%s</label>
+                            %s
+                        </div>',
+                        esc_html($question),
+                        self::generate_radio_inputs($key, $question_data['question']['answers'], $answers[$key] ?? null, $disabled)
+                    );
                 }
-                $result = ['status'=> true,'result'=>$result,'content'=>'<div class="alert alert-success">پاسخ نامه مورد نظر با موفقیت ثبت شد</div>'];
-            } else{
-                $result = ['status'=>false,'content'=>$result];
-            }
-        }
-       if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-          $result = json_encode($result);
-          echo $result;
-       }
-       else {
-          header("Location: ".$_SERVER["HTTP_REFERER"]);
-       }
-       die();
+                ?>
+                <input type="hidden" name="qid" value="<?php echo absint($qid); ?>">
+                <?php wp_nonce_field('pas_os-ref-nonce-' . $qid, 'pas_os_nonce'); ?>
+                <?php if (!$disabled) : ?>
+                    <button type="submit" class="btn btn-primary">ثبت پاسخ</button>
+                <?php endif; ?>
+            </form>
+        </div>
+        <?php
+        return ob_get_clean();
     }
-    function pas_os_ajax_client_request() {
-        parse_str($_REQUEST['pas_os_form'], $pasos_form);
-        if ( !wp_verify_nonce( $pasos_form['pas_os_nonce'], 'pas_os-ref-nonce-' .$pasos_form['qid'])) {
-          exit("pasos.com");
-        }
-        $result = ['status'=>false,'content'=>'خطا در پردازش اطلاعات'];
-        if ( isset($_REQUEST) ) {
-            $current_user = wp_get_current_user();
-            //array_values($params['question']);
-            $pasos =  new WC_PasOs_Api;
-            //$answerData = $pasos->answerData($pasos_form['qid'], array_values($pasos_form['question']));
-            //$pasos_form['cid'] = '23123144';
-            $clientDate = $pasos->clientDate($pasos_form);
-            $result = $pasos->addClient($clientDate);
-            if($result['status']==1){
-                update_user_meta( $current_user->ID, 'pas_os_cid',   $result['client']['cid']  );
-                $result = ['status'=> true,'form'=> pas_os_form($pasos_form['qid']), 'content'=>'<div class="alert alert-success">کاربر مورد نظر با موفقیت ثبت شد</div>'];
-            } else{
-                $result = ['status'=>false,'content'=>$result['message']];
-            }
-        }
-       if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-          $result = json_encode($result);
-          echo $result;
-       }
-       else {
-          header("Location: ".$_SERVER["HTTP_REFERER"]);
-       }
-       die();
-    }
-    function pas_os_ajax_client_admin_request() {
-        parse_str($_REQUEST['pas_os_form'], $pasos_form);
-        if ( !wp_verify_nonce( $pasos_form['pas_os_nonce'], 'pas_os-ref-nonce')) {
-          exit("pasos.com");
-        }
-        $result = ['status'=>false,'content'=>'خطا در پردازش اطلاعات'];
-        if ( isset($_REQUEST) ) {
-            $current_user = wp_get_current_user();
-            //array_values($params['question']);
-            $pasos =  new WC_PasOs_Api;
-            //$answerData = $pasos->answerData($pasos_form['qid'], array_values($pasos_form['question']));
-            //$pasos_form['cid'] = '23123144';
-            $clientDate = $pasos->clientDate($pasos_form);
-            $result = $pasos->addClient($clientDate);
-            if($result['status']==1){
-               // update_user_meta( $current_user->ID, 'pas_os_cid',   $result['client']['cid']  );
-                $result = ['status'=> true,'content'=>'<div class="notice notice-success"><p>کاربر مورد نظر با موفقیت ثبت شد.</p>
-                  <p><b>کد یکتای کاربر : '.$result['client']['cid'].'</b></p>
-                </div>'];
-            } else{
-                $result = ['status'=>false,'content'=>'<div class="notice notice-warning">'.$result['message'].'</div>'];
-            }
-        }
-       if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-          $result = json_encode($result);
-          echo $result;
-       }
-       else {
-          header("Location: ".$_SERVER["HTTP_REFERER"]);
-       }
-       die();
-    }
-    add_action( 'wp_ajax_pas_os_ajax_client_admin_request', 'pas_os_ajax_client_admin_request' );
-    add_action( 'wp_ajax_pas_os_ajax_client_request', 'pas_os_ajax_client_request' );
-    add_action( 'wp_ajax_pas_os_ajax_request', 'pas_os_ajax_request' );
-    add_action( 'wp_ajax_pas_os_ajax_admin_request', 'pas_os_ajax_admin_request' );
 
-
-function pas_os_func( $atts ) {
-    $a = shortcode_atts( array(
-        'qid' => '',
-        'aid' => '',
-        'page' => '',
-    ), $atts );
-    if(isset($atts['qid'])) return pas_os_form($atts['qid']);
-    elseif(isset($atts['aid'])) return pas_os_form($atts['qid']);
-}
-add_shortcode( 'pas-os', 'pas_os_func' );
-add_shortcode( 'pas-os-answers', 'pas_os_answers' );
-function pas_os_answers($atts){
-    $result = 'خطای دریافت';
-    if(isset($_GET['answer_id'])){
-        $answer_id = $_GET['answer_id'];
-        $pasos =  new WC_PasOs_Api;
-        $result = $pasos->getAnswer($answer_id); // print_r($result);
-        if($result['status']==1){
-            $result = $result['data']."\n".' <script type="text/javascript">'.
-            str_replace('$(','jQuery(', $result['chart']).'
-            </script>';
-        } else{
-            $result = $result['message'];
+    private static function generate_radio_inputs($name, $options, $selected = null, $disabled = '') {
+        $html = '';
+        foreach ($options as $value => $label) {
+            $html .= sprintf(
+                '<div class="form-check">
+                    <input class="form-check-input" type="radio" name="question[%s]" id="q%s_%s" value="%s" %s %s>
+                    <label class="form-check-label" for="q%s_%s">%s</label>
+                </div>',
+                esc_attr($name),
+                esc_attr($name),
+                esc_attr($value),
+                esc_attr($value),
+                $selected == $value ? 'checked' : '',
+                $disabled ? 'disabled' : '',
+                esc_attr($name),
+                esc_attr($value),
+                esc_html($label)
+            );
         }
-    }
-    return $result;
-}
-
-function pas_os_form($qid,$answers=[],$disabel=''){
-    if ( !is_user_logged_in() ) {
-        $html = '<div class="alert alert-warning">برای مشاهده لطفا وارد پنل کاربری خود شوید یا ثبت نام کنید.</div>';
-        $html .= '<hr /><a href="'.get_option('pas_os_signup_url').'" type="button" class="btn btn-primary">ثبت نام</a>
-                    <a href="'.get_option('pas_os_login_url').'" type="button" class="btn btn-info">ورود به کاربری</a><br>';
         return $html;
     }
-    $current_user = wp_get_current_user();
-    //$user_id = $current_user->ID;
-    if(!get_user_meta( $current_user->ID, 'pas_os_cid' , true )){
-        return pas_os_client_form($qid);
-    }
-    $pasos =  new WC_PasOs_Api;
-    $result = $pasos->getQuestion($qid); // print_r($result);
-    if(!isset($result['status'])) return;
-    if($result['status']!='1'){
-        return pas_os_error($result['message']);
-    }
-    $html = '<div class="pas-os-result"></div>
-        <div class="pas-os-data"><h3>'.$result['question']['title'].'</h3>';
-    $html .= '<div class="alert alert-info">'.$result['question']['description'].'</div>';
-    $html .= '';
-    $form = new MyForms('POST','','<div class="form-group"><div>','</div></div>','</div><div class="form-check">',$disabel);
-    foreach($result['question']['questions'] as $key=>$question){
-        $form->addInput('radio','question['.$key.']', '','',$result['question']['answers'],$question.' <span class="text-danger">*</span>','Please Select','form-check-input');
-    }
-    $form->addInput('hidden','qid',$qid, '','','','','');
-    $form->addInput('hidden','pas_os_nonce',wp_create_nonce( 'pas_os-ref-nonce-' . $qid ), '','','','','');
-    if(!$disabel) $form->addInput('submit','', 'ثبت پاسخ نامه','','','','','btn btn-primary');
-    $html .= $form->printForm();
-    $html .= '</div>';
-    return $html;
 }
-function pas_os_error($pm){ return '<div class="alert alert-warning">'.$pm.'</div>';}
-function pas_os_client_form($qid){
-    $current_user = wp_get_current_user();
-    $html = '<div class="pas-os-result"></div>
-        <h3>'.$result['question']['title'].'</h3>';
-    $html .= '<div class="alert alert-warning">برای مشاهده و تکمیل پاسخ نامه لطفا اطلاعات زیر را کامل کنید. موارد ستاره دار الزامی می باشد</div>';
-    $html .= '<div class="pas-os-data">';
-    $form = new MyForms('POST','','<div class="form-group row"><div class="col-sm-3">','</div></div>','</div><div class="col-sm-9">','','pas-os-client');
-    $form->addInput('text','clientName','','required','','نام و نام خانوادگی <span class="text-danger">*</span>','لطفا نام خود را وارد کنید','form-control');
-    $form->addInput('text','bday','','required','','سال تولد شمسی <span class="text-danger">*</span>','لطفا سال تولد خود را با فرمت 1363 وارد نمایید','form-control');
-    $form->addInput('select','gender','','required',['1'=>'آقا','2'=>'خانم'],'جنسیت <span class="text-danger">*</span>','انتخاب کنید','form-control');
-    $form->addInput('select','marital','','required',['1'=>'مجرد','2'=>'متاهل'],'وضعیت تاهل <span class="text-danger">*</span>','انتخاب کنید','form-control');
-    $form->addInput('text','edu','','','','سطح تحصیلات ','سطح  تحصیلات شما (اختیاری)','form-control');
-    $form->addInput('text','city','','','','شهر محل سکونت ','شهر محل سکونت (اختیاری)','form-control');
-    $form->addInput('text','phone','','','','شماره تماس ','شماره تماس (اختیاری)','form-control');
-    $form->addInput('hidden','qid',$qid, '','','','','');
-    $form->addInput('hidden','pas_os_nonce',wp_create_nonce( 'pas_os-ref-nonce-' . $qid ), '','','','','');
-    $form->addInput('submit','', 'تکمیل مشخصات','','','','','btn btn-primary');
-    $html .= $form->printForm();
-    $html .= '</div>';
-    return $html;
-}
+
+// AJAX handlers
+add_action('wp_ajax_pas_os_ajax_client_admin_request', [PasOs_Handler::class, 'handle_admin_request']);
+add_action('wp_ajax_pas_os_ajax_client_request', [PasOs_Handler::class, 'handle_client_request']);
+add_action('wp_ajax_pas_os_ajax_request', [PasOs_Handler::class, 'handle_answer_submission']);
+
+// Shortcode implementations
+add_shortcode('pas-os', function($atts) {
+    $atts = shortcode_atts(['qid' => 0], $atts);
+    return PasOs_Handler::generate_form(absint($atts['qid']));
+});
+
+add_shortcode('pas-os-answers', function() {
+    if (empty($_GET['answer_id'])) return '<div class="alert alert-warning">پارامتر مورد نیاز یافت نشد</div>';
+    
+    $pasos = new WC_PasOs_Api;
+    $result = $pasos->getAnswer(absint($_GET['answer_id']));
+    
+    if (empty($result['status']) || $result['status'] != 1) {
+        return '<div class="alert alert-danger">' . esc_html($result['message'] ?? 'خطا در دریافت اطلاعات') . '</div>';
+    }
+    
+    return wp_kses_post($result['data']) . PasOs_Handler::sanitize_chart_script($result['chart'] ?? '');
+});
